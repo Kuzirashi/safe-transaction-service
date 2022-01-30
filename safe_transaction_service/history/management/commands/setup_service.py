@@ -142,14 +142,12 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write(self.style.SUCCESS("Setting up Safe Contract Addresses :) "))
-        # ethereum_client = EthereumClientProvider()
-        # ethereum_network_id = 71393
 
         self._setup_safe_master_copies([
-            ("0x51497dF98CE8b8ea36c5bcA066B0a19481FbF406", 259860, "1.3.0+L2"),
-            ("0x8c8e049d2e6e83eD371CE8accb314ffBAd3D9Db9", 259862, "1.3.0"),
+            ("0xaCDd50B5262216a719eb457f4fe08EF3f5aae0aC", 106941, "1.3.0+L2"),
+            ("0x994deC611656275Bd52868f77e4484b10Ed6F642", 106942, "1.3.0"),
         ])
-        self._setup_safe_proxy_factories([("0x98bE20A0dDEFa04C8331883013746bED6C1F97f2", 259855)])
+        self._setup_safe_proxy_factories([("0x81aC261f72052EFE69D76E3FF8C2a8163fbB7EB3", 106938)])
             
 
         self.stdout.write(
