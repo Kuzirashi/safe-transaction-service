@@ -50,6 +50,7 @@ from .models import (
 from .serializers import get_data_decoded_from_data
 from .services import (
     BalanceServiceProvider,
+    IndexServiceProvider,
     SafeServiceProvider,
     TransactionServiceProvider,
 )
@@ -148,6 +149,44 @@ class AboutEthereumTracingRPCView(AboutEthereumRPCView):
             return Response(self._get_info(ethereum_client))
 
 
+class ERC20IndexingView(GenericAPIView):
+    serializer_class = serializers.ERC20IndexingStatusSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
+
+    @method_decorator(cache_page(15))  # 15 seconds
+    def get(self, request):
+        """
+        Get current indexing status for ERC20/721 events
+        """
+        index_service = IndexServiceProvider()
+
+        serializer = self.get_serializer(index_service.get_erc20_indexing_status())
+        return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+
+class IndexingView(GenericAPIView):
+    serializer_class = serializers.IndexingStatusSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
+
+    @method_decorator(cache_page(15))  # 15 seconds
+    def get(self, request):
+        """
+        Get current indexing status for ERC20/721 events
+        """
+        index_service = IndexServiceProvider()
+
+        serializer = self.get_serializer(index_service.get_indexing_status())
+        return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+
+class MasterCopiesView(ListAPIView):
+    serializer_class = serializers.MasterCopyResponseSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return SafeMasterCopy.objects.relevant()
+
+
 class AnalyticsMultisigTxsByOriginListView(ListAPIView):
     filter_backends = (django_filters.rest_framework.DjangoFilterBackend,)
     filterset_class = filters.AnalyticsMultisigTxsByOriginFilter
@@ -174,6 +213,7 @@ class AllTransactionsListView(ListAPIView):
         django_filters.rest_framework.DjangoFilterBackend,
         OrderingFilter,
     )
+    ordering_fields = ["execution_date", "safe_nonce", "block", "created"]
     pagination_class = pagination.SmallPagination
     serializer_class = (
         serializers.AllTransactionsSchemaSerializer
@@ -267,6 +307,7 @@ class AllTransactionsListView(ListAPIView):
         by a delegate). If you need that behaviour to be disabled set the query parameter `trusted=False`
         - Module Transactions for a Safe. `tx_type=MODULE_TRANSACTION`
         - Incoming Transfers of Ether/ERC20 Tokens/ERC721 Tokens. `tx_type=ETHEREUM_TRANSACTION`
+        Ordering_fields: ["execution_date", "safe_nonce", "block", "created"] eg: `created` or `-created`
         """
         address = kwargs["address"]
         if not fast_is_checksum_address(address):
@@ -520,6 +561,7 @@ def swagger_safe_balance_schema(serializer_class):
 
 class SafeBalanceView(GenericAPIView):
     serializer_class = serializers.SafeBalanceResponseSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
 
     def get_parameters(self) -> Tuple[bool, bool]:
         """
@@ -736,6 +778,19 @@ class SafeDelegateDestroyView(DestroyAPIView):
                 },
             )
 
+        body_delegate = request.data.get("delegate", delegate_address)
+        if (
+            body_delegate != delegate_address
+        ):  # Check delegate in body matches the one in url
+            return Response(
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                data={
+                    "code": 2,
+                    "message": "Delegate address in body should match the one in the url",
+                    "arguments": [body_delegate, delegate_address],
+                },
+            )
+
         request.data["safe"] = address
         request.data["delegate"] = delegate_address
         serializer = self.get_serializer(data=request.data)
@@ -928,6 +983,7 @@ class SafeIncomingTransferListView(SafeTransferListView):
 
 class SafeCreationView(GenericAPIView):
     serializer_class = serializers.SafeCreationInfoResponseSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
 
     @swagger_auto_schema(
         responses={
@@ -963,6 +1019,7 @@ class SafeCreationView(GenericAPIView):
 
 class SafeInfoView(GenericAPIView):
     serializer_class = serializers.SafeInfoResponseSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
 
     @swagger_auto_schema(
         responses={
@@ -1004,16 +1061,9 @@ class SafeInfoView(GenericAPIView):
             )
 
 
-class MasterCopiesView(ListAPIView):
-    serializer_class = serializers.MasterCopyResponseSerializer
-    pagination_class = None
-
-    def get_queryset(self):
-        return SafeMasterCopy.objects.relevant()
-
-
 class ModulesView(GenericAPIView):
     serializer_class = serializers.ModulesResponseSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
 
     @swagger_auto_schema(
         responses={
@@ -1044,6 +1094,7 @@ class ModulesView(GenericAPIView):
 
 class OwnersView(GenericAPIView):
     serializer_class = serializers.OwnerResponseSerializer
+    pagination_class = None  # Don't show limit/offset in swagger
 
     @swagger_auto_schema(
         responses={

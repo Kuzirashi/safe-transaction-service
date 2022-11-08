@@ -8,6 +8,7 @@ from cache_memoize import cache_memoize
 from cachetools import cachedmethod
 from eth_abi.exceptions import DecodingError
 from eth_typing import ChecksumAddress
+from gevent import pool
 from web3.contract import ContractEvent
 from web3.exceptions import BadFunctionCallOutput
 from web3.types import EventData, LogReceipt
@@ -80,8 +81,11 @@ class Erc20EventsIndexer(EventsIndexer):
         else:
             addresses_chunks = [addresses]
 
+        jobs = []
+
+        gevent_pool = pool.Pool(self.get_logs_concurrency)
         jobs = [
-            gevent.spawn(
+            gevent_pool.spawn(
                 self.ethereum_client.erc20.get_total_transfer_history,
                 addresses_chunk,
                 from_block=from_block_number,
@@ -89,11 +93,13 @@ class Erc20EventsIndexer(EventsIndexer):
             )
             for addresses_chunk in addresses_chunks
         ]
-        _ = gevent.joinall(jobs)
-        transfer_events = []
-        for job in jobs:
-            transfer_events.extend(job.get())
-        return transfer_events
+
+        with self.auto_adjust_block_limit(from_block_number, to_block_number):
+            # Check how long the first job takes
+            gevent.joinall(jobs[:1])
+
+        gevent.joinall(jobs)
+        return [transfer_event for job in jobs for transfer_event in job.get()]
 
     @cachedmethod(cache=operator.attrgetter("_cache_is_erc20"))
     @cache_memoize(60 * 60 * 24, prefix="erc20-events-indexer-is-erc20")  # 1 day

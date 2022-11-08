@@ -20,6 +20,7 @@ from gnosis.eth.oracles import (
     AaveOracle,
     BalancerOracle,
     ComposedPriceOracle,
+    CowswapOracle,
     CurveOracle,
     EnzymeOracle,
     KyberOracle,
@@ -28,10 +29,11 @@ from gnosis.eth.oracles import (
     PoolTogetherOracle,
     PriceOracle,
     PricePoolOracle,
+    SuperfluidOracle,
     SushiswapOracle,
     UnderlyingToken,
-    UniswapOracle,
     UniswapV2Oracle,
+    UniswapV3Oracle,
     YearnOracle,
 )
 
@@ -80,23 +82,8 @@ class PriceService:
         self.redis = redis
         self.binance_client = BinanceClient()
         self.coingecko_client = CoingeckoClient(self.ethereum_network)
-        self.curve_oracle = CurveOracle(self.ethereum_client)
         self.kraken_client = KrakenClient()
         self.kucoin_client = KucoinClient()
-        self.kyber_oracle = KyberOracle(self.ethereum_client)
-        self.sushiswap_oracle = SushiswapOracle(self.ethereum_client)
-        self.uniswap_oracle = UniswapOracle(self.ethereum_client)
-        self.uniswap_v2_oracle = UniswapV2Oracle(self.ethereum_client)
-        self.pool_together_oracle = PoolTogetherOracle(self.ethereum_client)
-        self.yearn_oracle = YearnOracle(self.ethereum_client)
-        self.enzyme_oracle = EnzymeOracle(self.ethereum_client)
-        self.aave_oracle = AaveOracle(self.ethereum_client, self.uniswap_v2_oracle)
-        self.balancer_oracle = BalancerOracle(
-            self.ethereum_client, self.uniswap_v2_oracle
-        )
-        self.mooniswap_oracle = MooniswapOracle(
-            self.ethereum_client, self.uniswap_v2_oracle
-        )
         self.cache_eth_price = TTLCache(
             maxsize=2048, ttl=60 * 30
         )  # 30 minutes of caching
@@ -113,38 +100,49 @@ class PriceService:
 
     @cached_property
     def enabled_price_oracles(self) -> Tuple[PriceOracle]:
-        if self.ethereum_network == EthereumNetwork.MAINNET:
-            return (
-                self.uniswap_v2_oracle,
-                self.sushiswap_oracle,
-                self.uniswap_oracle,
-                self.aave_oracle,
-                self.kyber_oracle,
+        oracles = tuple(
+            Oracle(self.ethereum_client)
+            for Oracle in (
+                UniswapV3Oracle,
+                CowswapOracle,
+                UniswapV2Oracle,
+                SushiswapOracle,
+                KyberOracle,
             )
-        else:
-            return (
-                self.uniswap_v2_oracle,
-                self.kyber_oracle,
-            )  # There are versions in another networks
+            if Oracle.is_available(self.ethereum_client)
+        )
+        if oracles:
+            if AaveOracle.is_available(self.ethereum_client):
+                oracles += (AaveOracle(self.ethereum_client, oracles[0]),)
+            if SuperfluidOracle.is_available(self.ethereum_client):
+                oracles += (SuperfluidOracle(self.ethereum_client, oracles[0]),)
+
+        return oracles
 
     @cached_property
     def enabled_price_pool_oracles(self) -> Tuple[PricePoolOracle]:
-        if self.ethereum_network == EthereumNetwork.MAINNET:
-            return self.uniswap_v2_oracle, self.balancer_oracle, self.mooniswap_oracle
-        else:
+        if not self.enabled_price_oracles:
             return tuple()
+        oracles = tuple(
+            Oracle(self.ethereum_client, self.enabled_price_oracles[0])
+            for Oracle in (
+                BalancerOracle,
+                MooniswapOracle,
+            )
+        )
+
+        if UniswapV2Oracle.is_available(self.ethereum_client):
+            # Uses a different constructor that others pool oracles
+            oracles = (UniswapV2Oracle(self.ethereum_client),) + oracles
+        return oracles
 
     @cached_property
     def enabled_composed_price_oracles(self) -> Tuple[ComposedPriceOracle]:
-        if self.ethereum_network == EthereumNetwork.MAINNET:
-            return (
-                self.curve_oracle,
-                self.yearn_oracle,
-                self.pool_together_oracle,
-                self.enzyme_oracle,
-            )
-        else:
-            return tuple()
+        return tuple(
+            Oracle(self.ethereum_client)
+            for Oracle in (CurveOracle, YearnOracle, PoolTogetherOracle, EnzymeOracle)
+            if Oracle.is_available(self.ethereum_client)
+        )
 
     def get_avalanche_usd_price(self) -> float:
         try:
@@ -153,7 +151,16 @@ class PriceService:
             return self.coingecko_client.get_avax_usd_price()
 
     def get_aurora_usd_price(self) -> float:
-        return self.coingecko_client.get_aoa_usd_price()
+        try:
+            return self.binance_client.get_aurora_usd_price()
+        except CannotGetPrice:
+            return self.coingecko_client.get_aoa_usd_price()
+
+    def get_cardano_usd_price(self) -> float:
+        return self.binance_client.get_ada_usd_price()
+
+    def get_algorand_usd_price(self) -> float:
+        return self.kraken_client.get_algo_usd_price()
 
     def get_binance_usd_price(self) -> float:
         try:
@@ -178,6 +185,15 @@ class PriceService:
                 return self.binance_client.get_matic_usd_price()
             except CannotGetPrice:
                 return self.coingecko_client.get_matic_usd_price()
+
+    def get_cronos_usd_price(self) -> float:
+        return self.kucoin_client.get_cro_usd_price()
+
+    def get_kcs_usd_price(self) -> float:
+        try:
+            return self.kucoin_client.get_kcs_usd_price()
+        except CannotGetPrice:
+            return self.coingecko_client.get_kcs_usd_price()
 
     @cachedmethod(cache=operator.attrgetter("cache_eth_price"))
     @cache_memoize(60 * 30, prefix="balances-get_eth_usd_price")  # 30 minutes
@@ -213,11 +229,41 @@ class PriceService:
         elif self.ethereum_network == EthereumNetwork.AVALANCHE:
             return self.get_avalanche_usd_price()
         elif self.ethereum_network in (
+            EthereumNetwork.MILKOMEDA_C1_TESTNET,
+            EthereumNetwork.MILKOMEDA_C1_MAINNET,
+        ):
+            return self.get_cardano_usd_price()
+        elif self.ethereum_network in (
             EthereumNetwork.AURORA,
             EthereumNetwork.AURORA_BETANET,
             EthereumNetwork.ARBITRUM_TESTNET,
         ):
             return self.get_aurora_usd_price()
+        elif self.ethereum_network in (
+            EthereumNetwork.CRONOS_TESTNET,
+            EthereumNetwork.CRONOS_MAINNET,
+        ):
+            return self.get_cronos_usd_price()
+        elif self.ethereum_network in (
+            EthereumNetwork.FUSE_MAINNET,
+            EthereumNetwork.FUSE_SPARK,
+        ):
+            return self.coingecko_client.get_fuse_usd_price()
+        elif self.ethereum_network in (
+            EthereumNetwork.KCC_MAINNET,
+            EthereumNetwork.KCC_TESTNET,
+        ):
+            return self.get_kcs_usd_price()
+        elif self.ethereum_network in (
+            EthereumNetwork.METIS,
+            EthereumNetwork.METIS_TESTNET,
+        ):
+            return self.coingecko_client.get_metis_usd_price()
+        elif self.ethereum_network in (
+            EthereumNetwork.MILKOMEDA_A1_TESTNET,
+            EthereumNetwork.MILKOMEDA_A1_MAINNET,
+        ):
+            return self.get_algorand_usd_price()
         else:
             try:
                 return self.kraken_client.get_eth_usd_price()
@@ -352,3 +398,34 @@ class PriceService:
                 FiatCode.USD,
                 token_eth_values_with_timestamp.timestamp,
             )
+
+    def get_eth_price_from_oracles(self, token_address: ChecksumAddress) -> float:
+        """
+        Calculate eth_price from oracles
+        :param token_address
+        :return: Current token price
+        """
+        return (
+            self.get_token_eth_value(token_address)
+            or self.get_token_usd_price(token_address)
+            / self.get_native_coin_usd_price()
+        )
+
+    def get_eth_price_from_composed_oracles(
+        self, token_address: ChecksumAddress
+    ) -> float:
+        """
+        Calculate eth_price from composed oracles
+        :param token_address
+        :return: Current token price
+        """
+        eth_price = 0
+        if underlying_tokens := self.get_underlying_tokens(token_address):
+            for underlying_token in underlying_tokens:
+                # Find underlying token price and multiply by quantity
+                address = underlying_token.address
+                eth_price += (
+                    self.get_eth_price_from_oracles(address) * underlying_token.quantity
+                )
+
+        return eth_price

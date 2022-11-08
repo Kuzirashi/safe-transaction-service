@@ -1,5 +1,6 @@
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from logging import getLogger
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -37,14 +38,14 @@ class EthereumIndexer(ABC):
         block_process_limit_max: int = 0,
         blocks_to_reindex_again: int = 0,
         updated_blocks_behind: int = 20,
-        query_chunk_size: Optional[int] = 5000,
+        query_chunk_size: Optional[int] = 1_000,
         block_auto_process_limit: bool = True,
     ):
         """
         :param ethereum_client:
         :param confirmations: Don't index last `confirmations` blocks to prevent from reorgs
         :param block_process_limit: Number of blocks to scan at a time for relevant data. `0` == `No limit`
-        :param block_process_limit: Maximum bumber of blocks to scan at a time for relevant data. `0` == `No limit`
+        :param block_process_limit_max: Maximum bumber of blocks to scan at a time for relevant data. `0` == `No limit`
         :param blocks_to_reindex_again: Number of blocks to reindex every time the indexer runs, in case something
             was missed.
         :param updated_blocks_behind: Number of blocks scanned for an address that can be behind and
@@ -261,6 +262,65 @@ class EthereumIndexer(ABC):
 
         return updated_addresses
 
+    @contextmanager
+    def auto_adjust_block_limit(self, from_block_number: int, to_block_number: int):
+        """
+        Optimize number of elements processed every time (block process limit)
+        based on how fast the block interval is retrieved
+        """
+
+        # Check that we are processing the `block_process_limit`, if not, measures are not valid
+        if not (
+            self.block_auto_process_limit
+            and (to_block_number - from_block_number) == self.block_process_limit
+        ):
+            yield
+        else:
+            start = int(time.time())
+            yield
+            delta = int(time.time()) - start
+            if delta > 30:
+                self.block_process_limit = max(self.block_process_limit // 2, 1)
+                logger.info(
+                    "%s: block_process_limit halved to %d",
+                    self.__class__.__name__,
+                    self.block_process_limit,
+                )
+            elif delta > 10:
+                new_block_process_limit = max(self.block_process_limit - 20, 1)
+                self.block_process_limit = new_block_process_limit
+                logger.info(
+                    "%s: block_process_limit decreased to %d",
+                    self.__class__.__name__,
+                    self.block_process_limit,
+                )
+            elif delta < 2:
+                self.block_process_limit *= 2
+                logger.info(
+                    "%s: block_process_limit duplicated to %d",
+                    self.__class__.__name__,
+                    self.block_process_limit,
+                )
+            elif delta < 5:
+                self.block_process_limit += 20
+                logger.info(
+                    "%s: block_process_limit increased to %d",
+                    self.__class__.__name__,
+                    self.block_process_limit,
+                )
+
+            if (
+                self.block_process_limit_max
+                and self.block_process_limit > self.block_process_limit_max
+            ):
+                self.block_process_limit = self.block_process_limit_max
+                logger.info(
+                    "%s: block_process_limit %d is bigger than block_process_limit_max %d, reducing",
+                    self.__class__.__name__,
+                    self.block_process_limit,
+                    self.block_process_limit_max,
+                )
+
     def process_addresses(
         self, addresses: Sequence[str], current_block_number: Optional[int] = None
     ) -> Tuple[Sequence[Any], int, bool]:
@@ -284,16 +344,6 @@ class EthereumIndexer(ABC):
 
         updated = to_block_number == (current_block_number - self.confirmations)
 
-        # Optimize number of elements processed every time (block process limit)
-        # Check that we are processing the `block_process_limit`, if not, measures are not valid
-        if (
-            self.block_auto_process_limit
-            and (to_block_number - from_block_number) == self.block_process_limit
-        ):
-            start = int(time.time())
-        else:
-            start = None
-
         try:
             elements = self.find_relevant_elements(
                 addresses,
@@ -309,50 +359,6 @@ class EthereumIndexer(ABC):
                 self.block_process_limit,
             )
             raise e
-
-        if start:
-            delta = int(time.time()) - start
-            if delta > 30:
-                self.block_process_limit //= 2
-                logger.info(
-                    "%s: block_process_limit halved to %d",
-                    self.__class__.__name__,
-                    self.block_process_limit,
-                )
-            elif delta > 10:
-                new_block_process_limit = max(self.block_process_limit - 20, 1)
-                self.block_process_limit = new_block_process_limit
-                logger.info(
-                    "%s: block_process_limit decreased to %d",
-                    self.__class__.__name__,
-                    self.block_process_limit,
-                )
-            elif delta < 1:
-                self.block_process_limit *= 2
-                logger.info(
-                    "%s: block_process_limit duplicated to %d",
-                    self.__class__.__name__,
-                    self.block_process_limit,
-                )
-            elif delta < 3:
-                self.block_process_limit += 20
-                logger.info(
-                    "%s: block_process_limit increased to %d",
-                    self.__class__.__name__,
-                    self.block_process_limit,
-                )
-
-        if (
-            self.block_process_limit_max
-            and self.block_process_limit > self.block_process_limit_max
-        ):
-            self.block_process_limit = self.block_process_limit_max
-            logger.info(
-                "%s: block_process_limit %d is bigger than block_process_limit_max %d, reducing",
-                self.__class__.__name__,
-                self.block_process_limit,
-                self.block_process_limit_max,
-            )
 
         processed_elements = self.process_elements(elements)
 

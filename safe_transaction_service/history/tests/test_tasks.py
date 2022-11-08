@@ -1,3 +1,5 @@
+import dataclasses
+import json
 import logging
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
@@ -10,8 +12,10 @@ from eth_account import Account
 
 from gnosis.eth import EthereumClient, EthereumNetwork
 
+from ...utils.redis import get_redis
 from ..models import SafeContract, SafeLastStatus, SafeStatus
-from ..services import IndexService
+from ..services import CollectiblesService, CollectiblesServiceProvider, IndexService
+from ..services.collectibles_service import CollectibleWithMetadata
 from ..tasks import (
     check_reorgs_task,
     check_sync_status_task,
@@ -27,6 +31,7 @@ from ..tasks import (
     process_decoded_internal_txs_for_safe_task,
     process_decoded_internal_txs_task,
     reindex_last_hours_task,
+    retry_get_metadata_task,
 )
 from .factories import (
     ERC20TransferFactory,
@@ -193,3 +198,76 @@ class TestTasks(TestCase):
                         f"Safe-address={safe_address} Processing traces again after reindexing",
                         cm.output[5],
                     )
+
+    @patch.object(CollectiblesService, "get_metadata", autospec=True, return_value={})
+    def test_retry_get_metadata_task(self, get_metadata_mock: MagicMock):
+        redis = get_redis()
+        collectibles_service = CollectiblesServiceProvider()
+
+        collectible_address = Account.create().address
+        collectible_id = 16
+        metadata_cache_key = collectibles_service.get_metadata_cache_key(
+            collectible_address, collectible_id
+        )
+
+        metadata = {
+            "name": "Octopus",
+            "description": "Atlantic Octopus",
+            "image": "http://random-address.org/logo-28.png",
+        }
+
+        # Check metadata cannot be retrieved
+        get_metadata_mock.assert_not_called()
+        self.assertEqual(
+            retry_get_metadata_task(collectible_address, collectible_id), None
+        )
+        # Collectible needs to be cached so metadata can be fetched
+        get_metadata_mock.assert_not_called()
+
+        get_metadata_mock.return_value = metadata
+        expected = CollectibleWithMetadata(
+            "Octopus",
+            "OCT",
+            "http://random-address.org/logo.png",
+            collectible_address,
+            collectible_id,
+            "http://random-address.org/info-28.json",
+            metadata,
+        )
+        redis.set(
+            metadata_cache_key,
+            json.dumps(dataclasses.asdict(expected)),
+            ex=300,
+        )
+
+        self.assertEqual(
+            retry_get_metadata_task(collectible_address, collectible_id), expected
+        )
+        # As metadata was set, task is not requesting it
+        get_metadata_mock.assert_not_called()
+
+        collectible_without_metadata = CollectibleWithMetadata(
+            "Octopus",
+            "OCT",
+            "http://random-address.org/logo.png",
+            collectible_address,
+            collectible_id,
+            "http://random-address.org/info-28.json",
+            {},
+        )
+        redis.set(
+            metadata_cache_key,
+            json.dumps(dataclasses.asdict(collectible_without_metadata)),
+            ex=300,
+        )
+
+        self.assertEqual(
+            retry_get_metadata_task(collectible_address, collectible_id), expected
+        )
+        # As metadata was not set, task requested it
+        get_metadata_mock.assert_called_once()
+
+        self.assertEqual(
+            json.loads(redis.get(metadata_cache_key)), dataclasses.asdict(expected)
+        )
+        redis.delete(metadata_cache_key)
