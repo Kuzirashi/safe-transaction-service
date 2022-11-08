@@ -295,8 +295,8 @@ MASTER_COPIES: Dict[EthereumNetwork, List[Tuple[str, int, str]]] = {
         ("0x69f4D1788e39c87893C980c06EdF4b7f686e2938", 93168, "1.3.0"),
     ],
     EthereumNetwork.GODWOKEN: [
-        ("0xB083396d05942B83741655201b95b9E0f6915594", 82367, "1.3.0+L2"),
-        ("0x54F771FFf32A43753cF26A8aF235A88e202cD3c3", 82367, "1.3.0"),
+        ("0xfb1bffC9d739B8D520DaF37dF666da4C687191EA", 215890, "1.3.0+L2"),
+        ("0x69f4D1788e39c87893C980c06EdF4b7f686e2938", 215889, "1.3.0"),
     ],
     EthereumNetwork.KLAY_BAOBAB: [
         ("0xfb1bffC9d739B8D520DaF37dF666da4C687191EA", 93821635, "1.3.0+L2"),
@@ -483,7 +483,7 @@ PROXY_FACTORIES: Dict[EthereumNetwork, List[Tuple[str, int]]] = {
         ("0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC", 93108),  # v1.3.0
     ],
     EthereumNetwork.GODWOKEN: [
-        ("0x4Df7456E32E367C490EF5Bf5fd86Bde7c3eD352B", 82366),  # v1.3.0
+        ("0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC", 215885),  # v1.3.0
     ],
     EthereumNetwork.KLAY_BAOBAB: [
         ("0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC", 93821613),  # v1.3.0
